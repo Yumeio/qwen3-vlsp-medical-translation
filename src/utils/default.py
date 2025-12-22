@@ -1,19 +1,7 @@
-import os
-import logging
 import torch
 import random 
 import bitsandbytes as bnb
 
-def setup_logger():
-    """Setup logger configuration"""
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
-        level=logging.INFO,
-    )
-    logger = logging.getLogger(__name__)
-    return logger
-    
 SEED_VALUE = 42
 
 def set_seed(seed: int = SEED_VALUE):

@@ -273,15 +273,40 @@ class MainConfig:
     grpo: Optional[GRPOTrainingConfig] = None
     
     training_mode: Literal["sft", "grpo"] = "sft"
-    peft_method: Literal["lora", "qlora", "ia3"] = "lora"
+    peft_method: Literal["lora", "qlora", "ia3", "none"] = "lora"
+    
+    # Allow custom output_dir override
+    custom_output_dir: Optional[str] = None
     
     def __post_init__(self):
-        """Initialize optional configs"""
+        """Initialize optional configs and set output_dir based on peft_method"""
+        # Initialize optional PEFT configs
         if self.peft_method == "ia3" and self.ia3 is None:
             self.ia3 = IA3Config()
         
         if self.training_mode == "grpo" and self.grpo is None:
             self.grpo = GRPOTrainingConfig()
+        
+        # Set output_dir based on training mode and peft method
+        self._set_output_dir()
+    
+    def _set_output_dir(self):
+        """Set output_dir dynamically based on training mode and PEFT method"""
+        if self.custom_output_dir is not None:
+            self.sft.output_dir = self.custom_output_dir
+            self.sft.run_name = self.custom_output_dir.split("/")[-1]
+            return
+        
+        if self.training_mode == "sft":
+            base_name = f"qwen_sft_{self.peft_method}"
+        elif self.training_mode == "grpo":
+            base_name = f"qwen_grpo_{self.peft_method}"
+        else:
+            base_name = f"qwen_{self.training_mode}_{self.peft_method}"
+        
+        self.sft.output_dir = f"./outputs/{base_name}"
+        
+        self.sft.run_name = base_name
             
     def get_training_config(self):
         """Get the appropriate training config based on mode"""
