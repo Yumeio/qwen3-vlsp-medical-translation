@@ -1,7 +1,5 @@
 import random
-import string as str_lib
 from typing import List, Dict
-from default import set_seed
 
 def format_chatml(messages: List[Dict[str, str]]) -> str:
     """Format messages as ChatML"""

@@ -39,5 +39,5 @@ def download_drive_folder(folder_url: str, save_dir: str):
 if __name__ == "__main__":
     download_drive_folder(
         folder_url="https://drive.google.com/drive/folders/141HugsN1LFftQXDI1lPRSRegnmv-rnDg",
-        save_dir="./dataset/raw"
+        save_dir="../dataset/raw"
     )

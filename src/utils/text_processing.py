@@ -2,7 +2,6 @@ import re
 import unicodedata
 from typing import Tuple, Optional
 from dataclasses import dataclass
-
 @dataclass
 class QualityMetrics:
     en_words: int
