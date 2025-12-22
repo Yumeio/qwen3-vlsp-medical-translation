@@ -6,7 +6,7 @@ from datasets import load_dataset
 from tqdm import tqdm
 from typing import Literal, Tuple, List
 
-from config import DataConfig
+from arguments import DataConfig
 from utils.default import set_seed
 from utils.text_processing import process_pair, check_quality
 from utils.formatting import create_sft_sample
