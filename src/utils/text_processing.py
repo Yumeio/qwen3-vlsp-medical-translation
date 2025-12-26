@@ -10,26 +10,18 @@ class QualityMetrics:
     is_valid: bool
     reason: Optional[str] = None
 
-def clean_text(text: str) -> str:
+def clean_text(s: str) -> str:
     """Clean and normalize text"""
-    # Normalize Unicode
-    text = unicodedata.normalize("NFKC", text)
+    s = s.replace("\ufeff", "")
+    s = unicodedata.normalize("NFKC", s)
+    s = s.replace("\u2013", "-").replace("\u2014", "-")
+    s = s.replace('\\u200b', '').replace("\u200e", "")
+    s = s.replace("“", '\"').replace("”", '\"')
+    s = s.replace("‘", "'").replace("’", "'")
+    s = s.replace("‟", '\"')
+    s = s.replace("‛", "'")
     
-    # Remove unwanted characters
-    text = re.sub(r'[\u200b\u200e\u200f\ufeff]', '', text)
-    
-    # Normalize whitespace
-    text = re.sub(r'[\s\t\n\r\xa0]+', ' ', text)
-    
-    # Remove special chars at start/end
-    text = re.sub(r'^[\-\*\•\>]\s+', '', text)
-    text = re.sub(r'\s+[\-\*\•\>]$', '', text)
-    
-    # Normalize punctuation
-    text = re.sub(r'\s+([,.!?;:])', r'\1', text)
-    text = re.sub(r'([,.!?;:])(?=[a-zA-Z0-9])', r'\1 ', text)
-    
-    return text.strip()
+    return s.strip()
 
 def check_quality(
     en_text: str, 
