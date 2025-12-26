@@ -21,36 +21,26 @@ class DataConfig:
     output_format: Literal["jsonl", "parquet"] = "parquet"
     
     # Field names
-    sft_text_field: str = "text"
+    sft_text_field: str = "messages"  
     grpo_prompt_field: str = "prompt"
     grpo_completions_field: str = "completions"
     
     # System prompt
     system_prompt: str = (
-        "You are Qwen-Med, an AI learning support specialist."
+        "You are an AI learning support specialist."
         "Your task is to provide accurate translation and explanation of algorithmic terminology"
         "between English and Vietnamese. Always respond professionally, concisely, accurately, and clearly."
+        "Rules: Keep abbreviations as-is (e.g., V.A, V.a, PTA, Type B/C/As). "
+        "Preserve all numbers, %, ±, ≥, ≤,... parentheses, and punctuation. "
     )
     
     # Prompts
     prompts_en_to_vi: List[str] = field(default_factory=lambda: [
-        "Dịch câu văn y học sau sang tiếng Việt:",
-        "Chuyển ngữ nội dung này sang tiếng Việt:",
-        "Hãy dịch thuật ngữ chuyên ngành này sang tiếng Việt:",
-        "Phiên dịch đoạn văn y học sau sang tiếng Việt:",
-        "Nghĩa tiếng Việt của đoạn văn này là gì:",
-        "Dịch sang Tiếng Việt đoạn văn sau:",
         "Translate the following medical text to Vietnamese:",
         "Convert this content into Vietnamese:",
         "Please translate this medical term into Vietnamese:",
     ])
     prompts_vi_to_en: List[str] = field(default_factory=lambda: [
-        "Dịch câu văn y học sau sang tiếng Anh:",
-        "Chuyển ngữ nội dung này sang tiếng Anh:",
-        "Hãy dịch thuật ngữ chuyên ngành này sang tiếng Anh:",
-        "Phiên dịch đoạn văn y học sau sang tiếng Anh:",
-        "Nghĩa tiếng Anh của đoạn văn này là gì:",
-        "Dịch sang Tiếng Anh đoạn văn sau:",
         "Translate the following medical text to English:",
         "Convert this content into English:",
         "Please translate this medical term into English:",
@@ -63,9 +53,10 @@ class DataConfig:
     max_length_ratio: float = 4.0
     
     # Preprocessing
-    preprocessing_num_workers: int = 4
-    max_train_samples: Optional[int] = None
+    preprocessing_num_workers: int = 16
+    max_trainval_samples: Optional[int] = 100000
     max_eval_samples: Optional[int] = None
+    val_ratio: float = 0.1
 
     def __post_init__(self):
         """Construct file paths if not provided"""
@@ -83,11 +74,12 @@ class DataConfig:
 @dataclass
 class ModelConfig:
     # Model selection
-    model_name_or_path: str = "Qwen/Qwen3-1.7B"
+    model_name_or_path: str = "Qwen/Qwen3-0.6B"
     tokenizer_name_or_path: Optional[str] = None
     cache_dir: str = "./model_cache"
     trust_remote_code: bool = True
     use_fast_tokenizer: bool = True
+    tokenizer_padding_side: str = "right"
     
     # Mixed Precision
     torch_dtype: Literal[
@@ -204,16 +196,16 @@ class SFTTrainingConfig(SFTConfig):
     max_steps: int = -1
     
     # Batch sizes and gradient accumulation
-    per_device_train_batch_size: int = 4
-    per_device_eval_batch_size: int = 4
-    gradient_accumulation_steps: int = 4
+    per_device_train_batch_size: int = 16
+    per_device_eval_batch_size: int = 16
+    gradient_accumulation_steps: int = 16
     
     # Optimizer
     optim: str = "adamw_torch_fused"  # or "adamw_8bit", "paged_adamw_8bit"
     learning_rate: float = 2e-4
     weight_decay: float = 0.01
     adam_beta1: float = 0.9
-    adam_beta2: float = 0.999
+    adam_beta2: float = 0.998
     adam_epsilon: float = 1e-8
     max_grad_norm: float = 1.0
     
@@ -233,7 +225,7 @@ class SFTTrainingConfig(SFTConfig):
     # SFT specific
     packing: bool = False
     max_seq_length: int = 512
-    dataset_text_field: str = "text"
+    dataset_text_field: str = "messages"  # Changed to "messages" for apply_chat_template
     dataset_num_proc: int = 4
 
     # Mixed precision
@@ -289,6 +281,7 @@ class MainConfig:
         
         # Set output_dir based on training mode and peft method
         self._set_output_dir()
+        self._set_run_name()
     
     def _set_output_dir(self):
         """Set output_dir dynamically based on training mode and PEFT method"""
@@ -307,7 +300,22 @@ class MainConfig:
         self.sft.output_dir = f"./outputs/{base_name}"
         
         self.sft.run_name = base_name
-            
+    
+    def _set_run_name(self):
+        """Set run_name dynamically based on training mode and PEFT method"""
+        if self.custom_output_dir is not None:
+            self.sft.run_name = self.custom_output_dir.split("/")[-1]
+            return
+        
+        if self.training_mode == "sft":
+            base_name = f"qwen_sft_{self.peft_method}"
+        elif self.training_mode == "grpo":
+            base_name = f"qwen_grpo_{self.peft_method}"
+        else:
+            base_name = f"qwen_{self.training_mode}_{self.peft_method}"
+        
+        self.sft.run_name = base_name
+
     def get_training_config(self):
         """Get the appropriate training config based on mode"""
         if self.training_mode == "sft":
