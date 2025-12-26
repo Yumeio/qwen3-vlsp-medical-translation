@@ -10,3 +10,4 @@ wandb
 numpy
 sacrebleu 
 evaluate
+nltk
