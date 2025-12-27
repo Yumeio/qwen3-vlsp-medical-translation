@@ -1,4 +1,4 @@
-import os 
+import os
 import torch
 from typing import Literal, Optional
 from datasets import load_dataset, Dataset, DatasetDict
@@ -9,178 +9,199 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizer
 )
-from peft import (
-    prepare_model_for_kbit_training,
-    get_peft_model
-)
+from peft import prepare_model_for_kbit_training, get_peft_model
 from trl import SFTTrainer
-from data_collator import DataCollatorForChatML
 
-from arguments import (
-    ModelConfig,
-    DataConfig,
-    MainConfig
-)
+class Trainer:
+    def __init__(self, config: MainConfig):
+        self.config = config
+        self.model = None
+        self.tokenizer = None
+        self.train_dataset = None
+        self.eval_dataset = None
+        self.trainer = None
+        self.callbacks = []
 
-os.environ["TOKENIZER_PARALLELISM"] = "False"
+    def setup(self):
+        self._load_tokenizer()
+        self._load_model()
+        self._load_datasets()
+        self._setup_trainer()
 
-def load_tokenizer(
-    main_cfg: MainConfig
-) -> PreTrainedTokenizer:
-    
-    model_cfg = main_cfg.model
-    
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_cfg.model_name_or_path,
-        cache_dir=model_cfg.cache_dir,
-        trust_remote_code=model_cfg.trust_remote_code,
-        padding_side="right"
-    )
+    def _load_tokenizer(self):
+        print("\n[1/4] Loading tokenizer...")
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    return tokenizer
-
-def load_sft_dataset(config: MainConfig) -> DatasetDict:
-    """Load preprocessed SFT datasets from parquet/jsonl files"""
-    
-    print("Loading SFT datasets...")
-    
-    # Load train dataset
-    train_dataset = load_dataset(
-        config.data.output_format,
-        data_files=config.data.sft_train_file
-    )['train']
-    
-    # Load validation dataset
-    eval_dataset = load_dataset(
-        config.data.output_format,
-        data_files=config.data.sft_val_file
-    )['train']
-    
-    print(f"Train samples: {len(train_dataset):,}")
-    print(f"Eval samples: {len(eval_dataset):,}")
-    
-    # Apply max samples limit if specified
-    if config.data.max_train_samples is not None:
-        train_dataset = train_dataset.select(
-            range(min(len(train_dataset), config.data.max_train_samples))
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.config.model.tokenizer_name_or_path,
+            cache_dir=self.config.model.cache_dir,
+            trust_remote_code=self.config.model.trust_remote_code,
+            use_fast=self.config.model.use_fast_tokenizer,
+            padding_side=self.config.model.tokenizer_padding_side,
         )
-    
-    if config.data.max_eval_samples is not None:
-        eval_dataset = eval_dataset.select(
-            range(min(len(eval_dataset), config.data.max_eval_samples))
+
+        print(f"✓ Tokenizer loaded: {self.config.model.tokenizer_name_or_path}")
+        print(f"  - Vocab size: {len(self.tokenizer)}")
+        print(f"  - Pad token: {self.tokenizer.pad_token}")
+        print(f"  - EOS token: {self.tokenizer.eos_token}")
+
+    def _load_model(self):
+        print("\n[2/4] Loading model...")
+
+        # Setup quantization config for QLoRA
+        quantization_config = None
+        if self.config.peft_method == "qlora":
+            print("  - Setting up 4-bit quantization (QLoRA)...")
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type=self.config.lora.bnb_4bit_quant_type,
+                bnb_4bit_use_double_quant=self.config.lora.bnb_4bit_use_double_quant,
+                bnb_4bit_compute_dtype=getattr(torch, self.config.lora.bnb_4bit_compute_dtype),
+            )
+
+        # Load base model
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.config.model.model_name_or_path,
+            cache_dir=self.config.model.cache_dir,
+            trust_remote_code=self.config.model.trust_remote_code,
+            torch_dtype=self.config.model.get_torch_dtype(),
+            device_map=self.config.model.device_map,
+            quantization_config=quantization_config,
+            attn_implementation="flash_attention_2"
         )
-    
-    print(f"After limits - Train: {len(train_dataset):,}, Eval: {len(eval_dataset):,}")
-    
-    return {
-        'train': train_dataset,
-        'eval': eval_dataset
-    }
 
-def get_quantization_config(
-    main_cfg: MainConfig
-):
-    if main_cfg.peft_method != "qlora" or not main_cfg.lora.load_in_4bit:
-        return None
-    
-    compute_dtype = getattr(
-        torch, main_cfg.lora.bnb_4bit_compute_dtype
-    )
+        print(f"✓ Base model loaded: {self.config.model.model_name_or_path}")
 
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=main_cfg.lora.load_in_4bit,
-        load_in_8bit=main_cfg.lora.load_in_8bit,
-        bnb_4bit_compute_dtype=compute_dtype,
-        bnb_4bit_quant_type=main_cfg.lora.bnb_4bit_quant_type,
-        bnb_4bit_use_double_quant=main_cfg.lora.bnb_4bit_use_double_quant,
-    )
+        # Prepare model for k-bit training if using quantization
+        if quantization_config is not None:
+            print("  - Preparing model for k-bit training...")
+            self.model = prepare_model_for_kbit_training(
+                self.model,
+                use_gradient_checkpointing=self.config.sft.gradient_checkpointing
+            )
 
-    return bnb_config
+        # Enable gradient checkpointing
+        if self.config.sft.gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
+            print("  - Gradient checkpointing enabled")
 
-def load_model(
-    main_cfg: MainConfig
-) -> PreTrainedModel:
+        # Apply PEFT
+        if self.config.peft_method != "none":
+            print(f"  - Applying {self.config.peft_method.upper()}...")
+            peft_config = self.config.get_peft_config()
+            self.model = get_peft_model(self.model, peft_config)
+            self.model.print_trainable_parameters()
+        else:
+            print("  - No PEFT method applied (full fine-tuning)")
 
-    bnb_config = get_quantization_config(main_cfg)
-    
-    # Mixed precision
-    model_cfg = main_cfg.model
-    model = AutoModelForCausalLM.from_pretrained(
-        model_cfg.model_name_or_path,
-        cache_dir=model_cfg.cache_dir,
-        torch_dtype=model_cfg.get_torch_dtype(),
-        device_map=model_cfg.device_map,
-        quantization_config=bnb_config,
-        trust_remote_code=model_cfg.trust_remote_code,
-    )
-    
-    if main_cfg.peft_method == "qlora" and main_cfg.lora.load_in_4bit:
-        model = prepare_model_for_kbit_training(model)
-    
-    return model
+        print(f"   Model loaded: {type(self.model).__name__}")
+        print(f"   Total parameters: {sum(p.numel() for p in self.model.parameters()):,}")
 
-def setup_peft_model(
-    main_cfg: MainConfig,
-    model: PreTrainedModel
-) -> PreTrainedModel:
-    """Apply PEFT methods to model"""
-    from peft import LoraConfig, IA3Config, TaskType
-    
-    if main_cfg.peft_method in ["lora", "qlora"]:
-        peft_cfg = LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
-            inference_mode=False,
-            r=main_cfg.lora.r,
-            lora_alpha=main_cfg.lora.lora_alpha,
-            lora_dropout=main_cfg.lora.lora_dropout,
-            target_modules=main_cfg.lora.target_modules,
-            bias=main_cfg.lora.bias,
+    def _load_datasets(self):
+        print("\n[3/4] Loading datasets...")
+
+        data_config = self.config.data
+
+        # Determine file format
+        if data_config.sft_train_file.endswith('.parquet'):
+            data_files = {
+                "train": data_config.sft_train_file,
+                "validation": data_config.sft_val_file,
+            }
+            dataset = load_dataset("parquet", data_files=data_files)
+        elif data_config.sft_train_file.endswith('.jsonl'):
+            data_files = {
+                "train": data_config.sft_train_file,
+                "validation": data_config.sft_val_file,
+            }
+            dataset = load_dataset("json", data_files=data_files)
+        else:
+            raise ValueError(f"Unsupported file format: {data_config.sft_train_file}")
+
+        self.train_dataset = dataset["train"]
+        self.eval_dataset = dataset["validation"]
+
+        print(f"✓ Datasets loaded:")
+        print(f"  - Train samples: {len(self.train_dataset):,}")
+        print(f"  - Validation samples: {len(self.eval_dataset):,}")
+        print(f"  - Features: {self.train_dataset.features}")
+
+        # Show sample
+        print("\n  Sample data:")
+        sample = self.train_dataset[0]
+        if "messages" in sample:
+            print(f"    Messages: {str(sample['messages'])[:200]}...")
+        elif "text" in sample:
+            print(f"    Text: {sample['text'][:200]}...")
+
+    def _setup_trainer(self):
+        print("\n[4/4] Setting up trainer...")
+        training_config = self.config.get_training_config()
+
+        data_collator = DataCollatorForChatML(
+            tokenizer=self.tokenizer,
+            instruction_template="<|im_start|>user\n",
+            response_template="<|im_start|>assistant\n",
+            mlm=False,
+            ignore_index=-100,
         )
-    elif main_cfg.peft_method == "ia3":
-        peft_cfg = IA3Config(
-            task_type=TaskType.CAUSAL_LM,
-            target_modules=main_cfg.ia3.target_modules,
-            feedforward_modules=main_cfg.ia3.feedforward_modules,
+
+        if self.config.data.compute_metrics:
+            metrics_callback = TranslationMetricsCallback(
+                tokenizer=self.tokenizer,
+                eval_dataset=self.eval_dataset,
+                num_samples=10,
+                max_new_tokens=512,
+                system_prompt=self.config.data.system_prompt
+            )
+            self.callbacks.append(metrics_callback)
+
+        self.trainer = SFTTrainer(
+            model=self.model,
+            args=training_config,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+            data_collator=data_collator
+            callbacks=self.callbacks
         )
-    else:
-        return model
 
-    return get_peft_model(model, peft_cfg)
+    def train(self):
+        print("STARTING TRAINING")
 
-def create_trainer(
-    main_cfg: MainConfig,
-    model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizer,
-    train_dataset: Dataset,
-    eval_dataset: Dataset,
-) -> SFTTrainer:
-    """Create and return an SFT trainer instance"""
-    from data_collator import DataCollatorForChatML
-    
-    # Setup PEFT if needed
-    if main_cfg.peft_method != "none":
-        model = setup_peft_model(main_cfg, model)
-        model.print_trainable_parameters()
-    
-    # Create data collator for ChatML format
-    data_collator = DataCollatorForChatML(
-        tokenizer=tokenizer,
-        instruction_template="<|im_start|>user\n",
-        response_template="<|im_start|>assistant\n",
-    )
-    
-    # Create SFT trainer
-    trainer = SFTTrainer(
-        model=model,
-        args=main_cfg.sft,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-        dataset_text_field=main_cfg.data.sft_text_field,
-    )
-    
-    return trainer
+        # Train
+        self.trainer.train()
+
+        print("TRAINING COMPLETED")
+
+    def evaluate(self):
+        """Run evaluation"""
+        print("RUNNING EVALUATION")
+
+        metrics = self.trainer.evaluate()
+
+        print("\nEvaluation Results:")
+        for key, value in metrics.items():
+            if isinstance(value, (int, float)):
+                print(f"  {key}: {value:.4f}")
+            else:
+                print(f"  {key}: {value}")
+
+        return metrics
+
+    def save_model(self, output_dir: Optional[str] = None):
+        """Save the trained model"""
+        if output_dir is None:
+            output_dir = self.config.sft.output_dir
+
+        print(f"\n[SAVING] Saving model to {output_dir}...")
+
+        # Save model and tokenizer
+        self.trainer.save_model(output_dir)
+        self.tokenizer.save_pretrained(output_dir)
+
+        # Save PEFT adapter if applicable
+        if self.config.peft_method != "none":
+            adapter_dir = os.path.join(output_dir, "adapter")
+            self.model.save_pretrained(adapter_dir)
+            print(f"✓ PEFT adapter saved to {adapter_dir}")
+
+        print(f"✓ Model saved to {output_dir}")

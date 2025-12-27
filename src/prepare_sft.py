@@ -7,11 +7,6 @@ from tqdm import tqdm
 from typing import List, Tuple, Optional
 from sklearn.model_selection import train_test_split
 
-from arguments import DataConfig
-from utils.text_processing import process_pair, check_quality
-from utils.formatting import create_sft_sample
-from utils.default import set_seed
-
 class SFTDatasetPreparer:
     def __init__(self, config: DataConfig, seed: int = 42):
         self.config = config
@@ -30,7 +25,7 @@ class SFTDatasetPreparer:
         train_ds = load_dataset(
             "text",
             data_files={
-                "en": train_en_file, 
+                "en": train_en_file,
                 "vi": train_vi_file
             },
             streaming=False,
@@ -68,7 +63,7 @@ class SFTDatasetPreparer:
         test_en = test_ds["en"]["text"]
         test_vi = test_ds["vi"]["text"]
         print(f"  ✓ Loaded: {len(test_en):,} pairs")
-        
+
         # Create bidirectional test samples
         test_samples = []
         for en, vi in zip(test_en, test_vi):
@@ -82,9 +77,9 @@ class SFTDatasetPreparer:
                 "target": en,
                 "direction": "vi2en"
             })
-        
+
         print(f"  ✓ Created: {len(test_samples):,} samples (bidirectional)")
-        
+
         return trainval_samples, test_samples
 
     def process_and_filter(
@@ -123,7 +118,7 @@ class SFTDatasetPreparer:
                 vi_text, en_text = source, target
 
             en_clean, vi_clean, metrics = process_pair(en_text, vi_text, self.config)
-            
+
             if metrics.is_valid:
                 if direction == "en2vi":
                     cleaned_samples.append({
@@ -162,7 +157,7 @@ class SFTDatasetPreparer:
         deduplicated_samples = []
         for sample in tqdm(cleaned_samples, total=len(cleaned_samples), desc="Deduplication"):
             key = (sample["source"], sample["target"], sample["direction"])
-            
+
             if key not in seen:
                 seen.add(key)
                 deduplicated_samples.append(sample)
@@ -177,7 +172,7 @@ class SFTDatasetPreparer:
         final_samples = []
         for sample in tqdm(deduplicated_samples, total=len(deduplicated_samples), desc="Quality Check"):
             source, target, direction = sample["source"], sample["target"], sample["direction"]
-            
+
             if direction == "en2vi":
                 en_text, vi_text = source, target
             else:  # vi2en
@@ -191,7 +186,7 @@ class SFTDatasetPreparer:
                 min_ratio=self.config.min_length_ratio,
                 max_ratio=self.config.max_length_ratio
             )
-            
+
             if metrics.is_valid:
                 final_samples.append(sample)
 
@@ -207,7 +202,7 @@ class SFTDatasetPreparer:
         for sample in final_samples:
             direction = sample["direction"]
             final_direction_counts[direction] = final_direction_counts.get(direction, 0) + 1
-        
+
         print(f"\n📊 Summary for {split}:")
         print(f"  Initial:   {initial_count:,}")
         print(f"  Final:     {len(final_samples):,}")
@@ -216,9 +211,9 @@ class SFTDatasetPreparer:
         print(f"\n  By direction:")
         print(f"    EN→VI: {final_direction_counts.get('en2vi', 0):,}")
         print(f"    VI→EN: {final_direction_counts.get('vi2en', 0):,}")
-        
+
         return final_samples
-    
+
     def make_balance_and_limit_samples(
         self,
         samples: List[dict],
@@ -229,11 +224,11 @@ class SFTDatasetPreparer:
             print(f"\n✓ No max_samples limit for {split_name}")
             random.shuffle(samples)
             return samples
-        
+
         print(f"⚖️  BALANCING & LIMITING - {split_name.upper()}")
         en2vi_samples = [s for s in samples if s["direction"] == "en2vi"]
         vi2en_samples = [s for s in samples if s["direction"] == "vi2en"]
-        
+
         print(f"\nBefore balancing:")
         print(f"  EN→VI: {len(en2vi_samples):,}")
         print(f"  VI→EN: {len(vi2en_samples):,}")
@@ -257,18 +252,18 @@ class SFTDatasetPreparer:
         print(f"  EN→VI: {len(en2vi_limited):,}")
         print(f"  VI→EN: {len(vi2en_limited):,}")
         print(f"  Total: {len(balanced_samples):,}")
-        
+
         return balanced_samples
 
     def split_train_val(
-        self, 
+        self,
         samples: List[dict],
         val_ratio: float = 0.1,
-    ): 
+    ):
         print(f"✂️  SPLITTING TRAIN/VAL")
         en2vi_samples = [s for s in samples if s["direction"] == "en2vi"]
         vi2en_samples = [s for s in samples if s["direction"] == "vi2en"]
-        
+
         print(f"\nInput samples:")
         print(f"  EN→VI: {len(en2vi_samples):,}")
         print(f"  VI→EN: {len(vi2en_samples):,}")
@@ -308,7 +303,7 @@ class SFTDatasetPreparer:
     ):
         print(f"🔨 CONVERTING TO SFT FORMAT - {split_name.upper()}")
         sft_samples = []
-        
+
         for sample in tqdm(samples, desc="  Creating SFT samples"):
             source = sample["source"]
             target = sample["target"]
@@ -325,14 +320,14 @@ class SFTDatasetPreparer:
                 system_prompt=self.config.system_prompt,
                 prompts=prompts
             )
-            
+
             sft_samples.append(sft_sample)
-            
+
         print(f"  ✓ Created {len(sft_samples):,} clean SFT samples")
         return sft_samples
-    
+
     def save_dataset(
-        self, 
+        self,
         samples: List[dict],
         split: str
     ):
@@ -341,7 +336,7 @@ class SFTDatasetPreparer:
             self.config.processed_dir,
             f"sft_{split}.{self.config.output_format}"
         )
-        
+
         print(f"\n💾 Saving {split} dataset...")
         if len(samples) > 0:
             sample_keys = set(samples[0].keys())
@@ -358,14 +353,14 @@ class SFTDatasetPreparer:
             with open(output_file, 'w', encoding='utf-8') as f:
                 for item in samples:
                     f.write(json.dumps(item, ensure_ascii=False) + "\n")
-        
+
         elif self.config.output_format == "parquet":
             df = pd.DataFrame(samples)
             df.to_parquet(output_file, index=False, compression='snappy')
-        
+
         else:
             raise ValueError(f"Unsupported format: {self.config.output_format}")
-        
+
         file_size = os.path.getsize(output_file) / (1024 * 1024)
         print(f"  ✓ Saved: {output_file}")
         print(f"    - Format: {self.config.output_format.upper()}")
@@ -375,7 +370,7 @@ class SFTDatasetPreparer:
 
     def build(self):
         print("\nBuilding dataset...")
-        
+
         # Load raw data
         trainval_samples, test_samples = self.load_raw_data()
 
@@ -383,7 +378,7 @@ class SFTDatasetPreparer:
         trainval_processed = self.process_and_filter(trainval_samples, "trainval")
         test_processed = self.process_and_filter(test_samples, "test")
 
-        # Balance and limited 
+        # Balance and limited
         trainval_balanced = self.make_balance_and_limit_samples(
             trainval_processed,
             self.config.max_trainval_samples,
@@ -394,7 +389,7 @@ class SFTDatasetPreparer:
             self.config.max_eval_samples,
             "test"
         )
-        
+
         # Split train/val
         train_samples, val_samples = self.split_train_val(
             trainval_balanced,
@@ -403,14 +398,14 @@ class SFTDatasetPreparer:
 
         # Convert to SFT chatml
         train_sft = self.convert_to_sft_chatml_format(train_samples, "train")
-        val_sft = self.convert_to_sft_chatml_format(val_samples, "validation") 
-        test_sft = self.convert_to_sft_chatml_format(test_balanced, "test") 
-        
+        val_sft = self.convert_to_sft_chatml_format(val_samples, "validation")
+        test_sft = self.convert_to_sft_chatml_format(test_balanced, "test")
+
         # Save to disk
         self.save_dataset(train_sft, "train")
         self.save_dataset(val_sft, "validation")
         self.save_dataset(test_sft, "test")
-        
+
         # Summary
         print("✅ PIPELINE COMPLETE")
         print(f"\n📁 Output directory: {self.config.processed_dir}")
@@ -421,9 +416,9 @@ class SFTDatasetPreparer:
         print(f"  {'Validation':<12} {len(val_sft):>10,}   sft_validation.{self.config.output_format}")
         print(f"  {'Test':<12} {len(test_sft):>10,}   sft_test.{self.config.output_format}")
         print("="*70 + "\n")
-        
-if __name__ == "__main__":
-    config = DataConfig()
-    
-    sft_prepare = SFTDatasetPreparer(config=config, seed=4663)
-    sft_prepare.build()
+
+# if __name__ == "__main__":
+    # config = DataConfig()
+
+    # sft_prepare = SFTDatasetPreparer(config=config, seed=4663)
+    # sft_prepare.build()

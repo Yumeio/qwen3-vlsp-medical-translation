@@ -10,6 +10,7 @@ def format_chatml(messages: List[Dict[str, str]]) -> str:
     return chatml_text.strip()
 
 def create_sft_sample(
+    tokenizer,
     source_text: str,
     target_text: str,
     system_prompt: str,
@@ -21,8 +22,9 @@ def create_sft_sample(
         {"role": "user", "content": f"{random.choice(prompts)}\n{source_text}"},
         {"role": "assistant", "content": target_text}
     ]
-    
-    return {"messages": messages}
+    text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+
+    return {"messages": text}
 
 def create_grpo_sample(
     source_text: str,
