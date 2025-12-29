@@ -12,6 +12,16 @@ This project focuses on fine-tuning **Qwen3 (1.7B)** models for **English-Vietna
   - **GRPO**: Generative Reward Policy Optimization.
 - **Efficient Training**: LoRA, QLoRA, IA3 adapters, Flash Attention 2, and BF16 precision.
 
+## Training Graphs
+
+### SFT
+![SFT Train Loss](sft_train_loss.png)
+![SFT MTA](sft_mta.png)
+
+### GRPO
+![GRPO Reward](grpo_train_reward.png)
+![GRPO Reward Std](grpo_train_reward_std.png)
+
 ## Quick Start
 
 ### 1. Installation

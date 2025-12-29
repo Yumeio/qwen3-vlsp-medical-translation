@@ -12,6 +12,16 @@ Dự án này tập trung vào việc tinh chỉnh (fine-tune) mô hình **Qwen3
   - **GRPO**: Generative Reward Policy Optimization.
 - **Huấn luyện Hiệu quả**: Sử dụng adapter LoRA, QLoRA, IA3, Flash Attention 2 và độ chính xác BF16.
 
+## Biểu đồ Huấn luyện
+
+### SFT
+![SFT Train Loss](sft_train_loss.png)
+![SFT MTA](sft_mta.png)
+
+### GRPO
+![GRPO Reward](grpo_train_reward.png)
+![GRPO Reward Std](grpo_train_reward_std.png)
+
 ## Bắt đầu nhanh
 
 ### 1. Cài đặt
