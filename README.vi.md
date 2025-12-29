@@ -35,3 +35,7 @@ Bắt đầu quy trình huấn luyện (SFT hoặc GRPO):
 ```bash
 python src/main.py
 ```
+
+## Checkpoint Mô hình
+
+Tải xuống các checkpoint đã huấn luyện tại đây: [Thư mục Google Drive](https://drive.google.com/drive/folders/1EEF71obQJ__149HmzRtWSycmJbyWIzVr?usp=sharing)

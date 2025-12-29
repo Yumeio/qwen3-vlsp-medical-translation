@@ -35,3 +35,7 @@ Start the training pipeline (SFT or GRPO):
 ```bash
 python src/main.py
 ```
+
+## Model Checkpoints
+
+Download trained checkpoints here: [Google Drive Folder](https://drive.google.com/drive/folders/1EEF71obQJ__149HmzRtWSycmJbyWIzVr?usp=sharing)
