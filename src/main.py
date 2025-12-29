@@ -1,21 +1,27 @@
-import os
-import torch
-from trainer import Trainer
-from config import create_sft_full_config
+from config import create_sft_full_config,create_grpo_full_config
+from trainer import TrainerSFT, TrainerGRPO
 
 def train_sft(strategy: str):
     config = create_sft_full_config(strategy=strategy)
     
-    trainer = Trainer(config)
+    trainer = TrainerSFT(config)
     trainer.setup()
     trainer.train()
     trainer.evaluate()
     trainer.save_model()
-    
-    if trainer.callbacks and hasattr(trainer.callbacks[0], 'best_scores'):
-        print("\n🏆 Best Scores:")
-        for metric, info in trainer.callbacks[0].best_scores.items():
-            print(f"   {metric.upper()}: {info['score']:.2f} (step {info['step']})")
-            
-if __name__ == "__main__":
-    train_sft("lora")
+
+def train_grpo(sft_strategy: str):
+    config = create_grpo_full_config(
+        f"./outputs/qwen_sft_{sft_strategy}",
+        sft_strategy
+    )
+    config.data.grpo_train_data = "grpo.jsonl"
+    trainer = TrainerGRPO(config)
+    trainer.setup()
+    trainer.train()
+    trainer.save_model()
+
+# if __name__ == "__main__":
+#     strategy = "lora"
+#     train_sft(strategy)
+#     train_grpo(strategy)

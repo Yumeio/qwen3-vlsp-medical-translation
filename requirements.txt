@@ -11,3 +11,4 @@ numpy
 sacrebleu 
 evaluate
 nltk
+openai

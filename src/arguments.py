@@ -14,8 +14,8 @@ class DataConfig:
     # File paths
     sft_train_file: Optional[str] = None
     sft_val_file: Optional[str] = None
-    grpo_train_file: Optional[str] = None
-    grpo_val_file: Optional[str] = None
+    grpo_train_data: Optional[str] = None
+    grpo_validation_data: Optional[str] = None
 
     # Output format
     output_format: Literal["jsonl", "parquet"] = "jsonl"
@@ -69,10 +69,10 @@ class DataConfig:
             self.sft_train_file = f"{self.processed_dir}/sft_train.{ext}"
         if self.sft_val_file is None:
             self.sft_val_file = f"{self.processed_dir}/sft_validation.{ext}"
-        if self.grpo_train_file is None:
-            self.grpo_train_file = f"{self.processed_dir}/grpo_train.{ext}"
-        if self.grpo_val_file is None:
-            self.grpo_val_file = f"{self.processed_dir}/grpo_validation.{ext}"
+        if self.grpo_train_data is None:
+            self.grpo_train_data = f"{self.processed_dir}/grpo_train.{ext}"
+        if self.grpo_validation_data is None:
+            self.grpo_validation_data = f"{self.processed_dir}/grpo_validation.{ext}"
 
 @dataclass
 class ModelConfig:
@@ -97,6 +97,9 @@ class ModelConfig:
 
     # Special tokens
     add_eos_token: bool = True
+
+    # Adapter checkpoint
+    load_adapter_from: Optional[str] = None
 
     def __post_init__(self):
         if self.tokenizer_name_or_path is None:
@@ -249,14 +252,46 @@ class SFTTrainingConfig(SFTConfig):
             self.per_device_train_batch_size *
             self.gradient_accumulation_steps
         )
-
-@dataclass
-class GRPOConfig:
-    pass
-
+        
 @dataclass
 class GRPOTrainingConfig(TRL_GRPOConfig):
-    pass
+    output_dir: str = "./outputs/grpo"
+    run_name: str = "qwen-grpo"
+    
+    num_train_epochs: float = 1.0
+    max_steps: int = -1
+    
+    # Batch sizes
+    per_device_train_batch_size: int = 8
+    gradient_accumulation_steps: int = 4
+    
+    optim: str = "adamw_torch_fused"
+    learning_rate: float = 5e-6
+    weight_rate: float = 0.01
+    max_grad_norm: float = 1.0
+
+    # Learning rate schedule
+    lr_scheduler_type: str = "cosine"
+    warmup_ratio: float = 0.1
+    
+    # GRPO specific
+    num_generations: int = 4
+    temperature: float = 0.8
+    top_p: float = 0.95
+    max_tokens: int = 512
+    
+    # Logging
+    logging_steps: int = 10
+    save_strategy: str = "steps"
+    save_steps: int = 25
+    report_to: Literal["wandb", "tensorboard", "none"] = "wandb"
+    
+    # Mixed precision
+    bf16: bool = True
+    fp16: bool = False
+    
+    # Gradient checkpointing
+    gradient_checkpointing: bool = True
 
 @dataclass
 class MainConfig:

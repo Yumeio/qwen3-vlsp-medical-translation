@@ -1,5 +1,8 @@
 import os
 import torch
+import json
+from pathlib import Path
+import sacrebleu
 from typing import Literal, Optional
 from datasets import load_dataset, Dataset, DatasetDict
 from transformers import (
@@ -9,10 +12,14 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizer
 )
-from peft import prepare_model_for_kbit_training, get_peft_model
-from trl import SFTTrainer
-
-class Trainer:
+from peft import prepare_model_for_kbit_training, get_peft_model, PeftModel
+from trl import (
+    SFTTrainer, 
+    GRPOTrainer, 
+    GRPOConfig
+)
+from arguments import MainConfig
+class TrainerSFT:
     def __init__(self, config: MainConfig):
         self.config = config
         self.model = None
@@ -163,7 +170,7 @@ class Trainer:
             data_collator=data_collator
             callbacks=self.callbacks
         )
-
+    
     def train(self):
         print("STARTING TRAINING")
 
@@ -205,3 +212,135 @@ class Trainer:
             print(f"✓ PEFT adapter saved to {adapter_dir}")
 
         print(f"✓ Model saved to {output_dir}")
+
+def reward_match_chatgpt(prompts, completions, **kwargs):
+    """
+    Thưởng nếu bản dịch giống với bản dịch mẫu của ChatGPT.
+    """
+    # Lấy dữ liệu từ cột đã đổi tên
+    chatgpt_data = kwargs.get("samples", []) 
+    
+    rewards = []
+    for pred, gpt_samples in zip(completions, chatgpt_data):
+        if not gpt_samples:
+            rewards.append(0.0)
+            continue
+            
+        # Trong file jsonl, 'completions' là list các dict: [{"text": "...", "score": ...}]
+        # Ta lấy text của câu có điểm cao nhất hoặc lấy tất cả làm tham chiếu
+        # Ví dụ lấy câu đầu tiên trong list làm chuẩn
+        gpt_ref_text = gpt_samples[0]['text'] 
+        
+        # Tính BLEU score so với câu của ChatGPT
+        score = sacrebleu.sentence_bleu(pred, [gpt_ref_text]).score
+        rewards.append(score / 20.0)
+        
+    return rewards
+        
+class TrainerGRPO:
+    def __init__(self, config: MainConfig):     
+        self.model = None
+        self.tokenizer = None
+        self.train_dataset = None
+        self.eval_dataset = None
+        self.trainer = None
+        
+        self.config = config
+        
+    def _load_checkpoint(self):
+        print("\n[1/3] Loading checkpoint...")
+        if self.config.peft_method == "qlora":
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+            )
+            print("  ✓ Using 4-bit quantization (QLoRA)")
+        
+        model = AutoModelForCausalLM.from_pretrained(
+            self.config.model.model_name_or_path,
+            quantization_config=bnb_config if self.config.peft_method == "qlora" else None,
+            torch_dtype=torch.float16,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+        self.model = PeftModel.from_pretrained(model, self.config.model.load_adapter_from)
+        print(f"✓ Model loaded: {self.config.model.load_adapter_from}")
+        self.tokenizer = AutoTokenizer.from_pretrained(self.config.model.load_adapter_from, trust_remote_code=True)
+        print(f"✓ Tokenizer loaded: {self.config.model.load_adapter_from}")
+    
+    def _load_dataset(self):
+        print("\n[2/3] Loading dataset...")
+        
+        # Load training data
+        train_path = self.config.data.grpo_train_data
+        file_ext = Path(train_path).suffix.lower()
+        
+        if file_ext == '.parquet':
+            self.train_dataset = load_dataset('parquet', data_files=train_path)['train']
+        elif file_ext in ['.jsonl', '.json']:
+            self.train_dataset = load_dataset('json', data_files=train_path)['train']
+        else:
+            raise ValueError(f"Unsupported format: {file_ext}")
+        
+        def normalize(sample):
+            if 'completions' in sample and len(sample['completions']) > 0:
+                first = sample['completions'][0]
+                if 'content' in first and 'text' not in first:
+                    sample['completions'] = [
+                        {'text': c.get('content', ''), 'score': c['score']}
+                        for c in sample['completions']
+                    ]
+            return sample
+        
+        self.train_dataset = self.train_dataset.map(normalize)
+        
+        print(f"  Train samples: {len(self.train_dataset)}")
+        
+        # Load validation data (optional)
+        if self.config.data.grpo_validation_data:
+            val_path = self.config.data.grpo_validation_data
+            if os.path.exists(val_path):
+                file_ext = Path(val_path).suffix.lower()
+                
+                if file_ext == '.parquet':
+                    self.eval_dataset = load_dataset('parquet', data_files=val_path)['train']
+                elif file_ext in ['.jsonl', '.json']:
+                    self.eval_dataset = load_dataset('json', data_files=val_path)['train']
+                
+                self.eval_dataset = self.eval_dataset.map(normalize)
+                print(f"  Eval samples: {len(self.eval_dataset)}")
+
+    def _setup_trainer(self):
+        print("\n[4] Setting up trainer...")
+        self.trainer = GRPOTrainer(
+            model=self.model,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset if self.eval_dataset else None,
+            args=self.config.grpo,
+            reward_funcs=reward_match_chatgpt,
+        )
+
+    def setup(self):
+        self._load_checkpoint()
+        self._load_dataset()
+        self._setup_trainer()
+
+    def train(self):
+        print("\n[5] Training...")
+        self.trainer.train()
+        print("✓ Training completed")
+
+    def evaluate(self):
+        print("\n[6] Evaluating...")
+        metrics = self.trainer.evaluate()
+        print("✓ Evaluation completed")
+        return metrics
+
+    def save_model(self, output_dir: Optional[str] = None):
+        print("\n[7] Saving model...")
+        if output_dir is None:
+            output_dir = self.config.grpo.output_dir
+        self.trainer.save_model(output_dir)
+        print("✓ Model saved")
